@@ -2,61 +2,98 @@ package com.pulseai.ticket.domain;
 
 import com.pulseai.ticket.domain.model.Priority;
 import com.pulseai.ticket.domain.model.Ticket;
-import com.pulseai.ticket.domain.model.TicketId;
 import com.pulseai.ticket.domain.model.TicketStatus;
+import com.pulseai.ticket.domain.model.events.DomainEvent;
 import com.pulseai.ticket.domain.model.events.TicketAssignedEvent;
 import com.pulseai.ticket.domain.model.events.TicketCreatedEvent;
 import com.pulseai.ticket.domain.model.events.TicketResolvedEvent;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.*;
 
 class TicketTest {
 
+    private static final String CUSTOMER_ID = UUID.randomUUID().toString();
+    private static final String AGENT_ID = UUID.randomUUID().toString();
+    private static final String AGENT_NAME = "Alice Smith";
+
     @Test
-    void shouldCreateTicketWithOpenStatus() {
-        Ticket ticket = Ticket.create("Login issue", "Cannot login to portal", Priority.HIGH);
+    void shouldOpenTicketWithOpenStatus() {
+        Ticket ticket = Ticket.open("Login issue", "Cannot login to portal", Priority.HIGH, CUSTOMER_ID, "auth");
+
         assertThat(ticket.getStatus()).isEqualTo(TicketStatus.OPEN);
         assertThat(ticket.getTitle()).isEqualTo("Login issue");
         assertThat(ticket.getPriority()).isEqualTo(Priority.HIGH);
-        assertThat(ticket.getDomainEvents()).hasSize(1);
-        assertThat(ticket.getDomainEvents().get(0)).isInstanceOf(TicketCreatedEvent.class);
+        assertThat(ticket.getCustomerId()).isEqualTo(CUSTOMER_ID);
+
+        List<DomainEvent> events = ticket.pullDomainEvents();
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(TicketCreatedEvent.class);
     }
 
     @Test
     void shouldAssignTicketToAgent() {
-        Ticket ticket = Ticket.create("DB error", "Database connection failed", Priority.CRITICAL);
-        String agentId = UUID.randomUUID().toString();
-        ticket.assignTo(agentId);
-        assertThat(ticket.getAssignedAgentId()).isEqualTo(agentId);
+        Ticket ticket = Ticket.open("DB error", "Database connection failed", Priority.CRITICAL, CUSTOMER_ID, "infra");
+        ticket.pullDomainEvents(); // clear creation event
+
+        ticket.assignTo(AGENT_ID, AGENT_NAME);
+
+        assertThat(ticket.getAssignedAgentId()).isEqualTo(AGENT_ID);
+        assertThat(ticket.getAssignedAgentName()).isEqualTo(AGENT_NAME);
         assertThat(ticket.getStatus()).isEqualTo(TicketStatus.IN_PROGRESS);
-        assertThat(ticket.getDomainEvents()).hasSize(2);
-        assertThat(ticket.getDomainEvents().get(1)).isInstanceOf(TicketAssignedEvent.class);
+
+        List<DomainEvent> events = ticket.pullDomainEvents();
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(TicketAssignedEvent.class);
     }
 
     @Test
-    void shouldResolveTicket() {
-        Ticket ticket = Ticket.create("UI bug", "Button misaligned", Priority.LOW);
-        ticket.assignTo(UUID.randomUUID().toString());
+    void shouldResolveAssignedTicket() {
+        Ticket ticket = Ticket.open("UI bug", "Button misaligned", Priority.LOW, CUSTOMER_ID, "ui");
+        ticket.assignTo(AGENT_ID, AGENT_NAME);
+        ticket.pullDomainEvents(); // clear previous events
+
         ticket.resolve("Fixed CSS class");
+
         assertThat(ticket.getStatus()).isEqualTo(TicketStatus.RESOLVED);
-        assertThat(ticket.getResolution()).isEqualTo("Fixed CSS class");
-        assertThat(ticket.getDomainEvents()).hasSize(3);
-        assertThat(ticket.getDomainEvents().get(2)).isInstanceOf(TicketResolvedEvent.class);
+        assertThat(ticket.getResolutionNote()).isEqualTo("Fixed CSS class");
+        assertThat(ticket.getResolvedAt()).isNotNull();
+
+        List<DomainEvent> events = ticket.pullDomainEvents();
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0)).isInstanceOf(TicketResolvedEvent.class);
     }
 
     @Test
-    void shouldNotResolveOpenTicket() {
-        Ticket ticket = Ticket.create("Auth error", "Token expired", Priority.HIGH);
+    void shouldNotResolveUnassignedTicket() {
+        Ticket ticket = Ticket.open("Auth error", "Token expired", Priority.HIGH, CUSTOMER_ID, "auth");
         assertThatThrownBy(() -> ticket.resolve("Fixed"))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("unassigned");
+    }
+
+    @Test
+    void shouldNotAssignAlreadyInProgressTicket() {
+        Ticket ticket = Ticket.open("Perf issue", "Slow query", Priority.MEDIUM, CUSTOMER_ID, "db");
+        ticket.assignTo(AGENT_ID, AGENT_NAME);
+        assertThatThrownBy(() -> ticket.assignTo(UUID.randomUUID().toString(), "Bob"))
             .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
-    void shouldNotAssignAlreadyAssignedTicket() {
-        Ticket ticket = Ticket.create("Perf issue", "Slow query", Priority.MEDIUM);
-        ticket.assignTo(UUID.randomUUID().toString());
-        assertThatThrownBy(() -> ticket.assignTo(UUID.randomUUID().toString()))
-            .isInstanceOf(IllegalStateException.class);
+    void shouldRejectBlankTitle() {
+        assertThatThrownBy(() -> Ticket.open("", "Some content", Priority.LOW, CUSTOMER_ID, "general"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("title");
+    }
+
+    @Test
+    void pullDomainEventsClearsTheList() {
+        Ticket ticket = Ticket.open("Test", "Content", Priority.LOW, CUSTOMER_ID, "general");
+        assertThat(ticket.pullDomainEvents()).hasSize(1);
+        assertThat(ticket.pullDomainEvents()).isEmpty();
     }
 }
