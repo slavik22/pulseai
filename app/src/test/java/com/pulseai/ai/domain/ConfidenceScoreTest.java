@@ -9,7 +9,7 @@ class ConfidenceScoreTest {
     @Test
     void shouldCreateValidConfidenceScore() {
         ConfidenceScore score = ConfidenceScore.of(0.85);
-        assertThat(score.getValue()).isEqualTo(0.85);
+        assertThat(score.value()).isEqualTo(0.85);
     }
 
     @Test
